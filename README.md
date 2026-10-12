@@ -57,6 +57,13 @@ Tokens are shaded like coins with a moving glint, particles have soft edges, bub
 mobs and gear get directional light, and the sky has clouds, a sun, stars and a moon. "Ugly Graphics" in the settings turns
 the extra effects off.
 
+The player is a classic R6 Roblox avatar with idle, walk, jump, fall and glide animations, holding its tool in the right hand
+and swinging it with the arm. Gear sits on the body part it belongs to. Every tool has a detailed model, the field mobs
+(ladybugs, rhino beetles, spiders, mantises, scorpions, werewolves, King Beetle, Tunnel Bear) have rounded, detailed bodies whose
+legs walk, and each field is ringed with props that match it: sunflowers, mushrooms, bamboo, cacti, pumpkins, pines, palms and
+more. Honey conversion, stinger hits, defeated mobs, level ups, gifted bees, hatching and a full backpack each have their own
+particle effect.
+
 Where this differs from the original on purpose: there are no stickers, so sticker prizes and the Sticker Stack badge are left out;
 the Mountain Top badge boosts all bee gathering instead of only gifted bees; the Wealth Clock keeps its power between sessions
 as long as it's wound within 75 minutes of playtime; and the new beequips have approximated stats, because the original's stat
@@ -73,6 +80,9 @@ tables aren't public.
 | `guildQuests.js`, `dialogue.js` | Quest dialogue. |
 | `beequips.js`, `content.js` | Definitions and icons of the beequips, items and buffs that were added later. Icons are drawn once and reused for the inventory, hotbar and token textures. |
 | `mapAdditions.js` | Geometry and positions (`window.BSS_WORLD`) of structures added to the map. |
+| `mapDetails.js` | Decorations around the fields. Their placements were baked by raycasting the map's collision geometry, so each one stands on flat ground clear of walls, roofs, NPCs and machines. |
+| `playerModel.js` | The R6 character: its parts, where each gear slot attaches, and the animations. |
+| `toolModels.js`, `mobModels.js` | Detailed tool and mob models, which replace the original meshes of the same name. |
 | `codes.js` | Promo codes. |
 | `mapMesh.js`, `playerGear.js`, `textures.js`, `GLSLShaders.js`, `MathHelper.js`, `thumbnail.js` | The map, gear, textures, shaders and helpers. |
 

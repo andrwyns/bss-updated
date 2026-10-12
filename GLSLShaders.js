@@ -951,6 +951,11 @@ window.glsl_mob_renderer_vsh = `#version 300 es
     uniform vec4 instance_info1;
     uniform vec2 instance_info2;
     uniform float isNight;
+
+    //walk cycle: x is the phase, y how far the legs swing (0 leaves the mesh alone), z the height below which a vertex is
+    //part of a leg, and w how far from the middle (sideways) a vertex has to be to count as a leg
+    uniform vec4 mobAnim;
+    uniform float mobAnimZ;
     
     void main(){
         
@@ -959,7 +964,18 @@ window.glsl_mob_renderer_vsh = `#version 300 es
         float s=sin(instance_info1.w);
         float c=cos(instance_info1.w);
 
-        pixWorld=vec3(vertPos.x*c-vertPos.z*s,vertPos.y,vertPos.x*s+vertPos.z*c)*instance_info2.x+instance_info1.xyz;
+        vec3 p=vertPos;
+
+        if(mobAnim.y>0.0&&p.y<mobAnim.z&&abs(p.x)>mobAnim.w){
+
+            //legs on opposite sides step out of phase, and mobAnimZ staggers the legs along one side like a tripod gait
+            float k=mobAnim.z-p.y,ph=mobAnim.x+(p.x>0.0?0.0:3.14159)+p.z*mobAnimZ;
+
+            p.z+=sin(ph)*k*mobAnim.y;
+            p.y+=max(cos(ph),0.0)*k*mobAnim.y*0.3;
+        }
+
+        pixWorld=vec3(p.x*c-p.z*s,p.y,p.x*s+p.z*c)*instance_info2.x+instance_info1.xyz;
         
         gl_Position=viewMatrix*vec4(pixWorld,1);
     }

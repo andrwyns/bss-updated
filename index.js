@@ -13282,6 +13282,23 @@ function BeeSwarmSimulator(DATA){
     let BUG_MOB_DAMAGE={rhinoBeetle:20,ladybug:18,spider:25,werewolf:35,scorpion:30,mantis:30,kingBeetle:75,tunnelBear:10000,caveMonster:10000},
         BUG_MOB_SPEED={tunnelBear:2,caveMonster:9}
 
+    //swings a mob's legs while it moves, using the walk cycle its model describes in mobModels.js
+    function setMobWalkCycle(mob,type){
+
+        let a=window.mobModels[type]&&window.mobModels[type].anim
+
+        if(!a||player.extraInfo.enableLowGraph) return
+
+        let last=mob.animLastPos||mob.pos,moved=Math.hypot(mob.pos[0]-last[0],mob.pos[2]-last[2])/Math.max(dt,0.001)
+
+        mob.animLastPos=[mob.pos[0],mob.pos[1],mob.pos[2]]
+        mob.animAmount=(mob.animAmount||0)+((moved>0.4?1:0)-(mob.animAmount||0))*Math.min(dt*8,1)
+        mob.animPhase=(mob.animPhase||0)+dt*a.speed*mob.animAmount
+
+        gl.uniform4f(glCache.mob_anim,mob.animPhase,a.amount*mob.animAmount,a.legTop,a.minX)
+        gl.uniform1f(glCache.mob_animZ,a.zPhase)
+    }
+
     class BugMob {
         
         constructor(spawnPos,bounds,level,health,type,id){
@@ -13617,7 +13634,9 @@ function BeeSwarmSimulator(DATA){
                     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,meshes[this.type].indexBuffer)
                     gl.vertexAttribPointer(glCache.mob_vertPos,3,gl.FLOAT,gl.FLASE,24,0)
                     gl.vertexAttribPointer(glCache.mob_vertColor,3,gl.FLOAT,gl.FLASE,24,12)
+                    setMobWalkCycle(this,this.type)
                     gl.drawElements(gl.TRIANGLES,meshes[this.type].indexAmount,gl.UNSIGNED_SHORT,0)
+                    gl.uniform4f(glCache.mob_anim,0,0,0,0)
                     
                     this.pos[1]+=this.type==='werewolf'||this.type==='mantis'||this.type==='tunnelBear'?3:1
                     textRenderer.addCTX(MATH.doGrammar(this.type)+' (Level '+this.level+')',[this.pos[0],this.pos[1]+0.4,this.pos[2]],COLORS.whiteArr,100)
@@ -13662,7 +13681,9 @@ function BeeSwarmSimulator(DATA){
                     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,meshes[this.type].indexBuffer)
                     gl.vertexAttribPointer(glCache.mob_vertPos,3,gl.FLOAT,gl.FLASE,24,0)
                     gl.vertexAttribPointer(glCache.mob_vertColor,3,gl.FLOAT,gl.FLASE,24,12)
+                    setMobWalkCycle(this,this.type)
                     gl.drawElements(gl.TRIANGLES,meshes[this.type].indexAmount,gl.UNSIGNED_SHORT,0)
+                    gl.uniform4f(glCache.mob_anim,0,0,0,0)
                     
                     this.pos[1]+=this.type==='werewolf'||this.type==='mantis'||this.type==='tunnelBear'?3:1
                     textRenderer.addCTX(this.grammaredName+' (Level '+this.level+')',[this.pos[0],this.pos[1]+0.4,this.pos[2]],COLORS.whiteArr,100)
@@ -21133,6 +21154,8 @@ function BeeSwarmSimulator(DATA){
         gl.enableVertexAttribArray(glCache.mob_vertColor)
         glCache.mob_instanceInfo1=gl.getUniformLocation(mobRendererProgram,'instance_info1')
         glCache.mob_instanceInfo2=gl.getUniformLocation(mobRendererProgram,'instance_info2')
+        glCache.mob_anim=gl.getUniformLocation(mobRendererProgram,'mobAnim')
+        glCache.mob_animZ=gl.getUniformLocation(mobRendererProgram,'mobAnimZ')
         
         glCache.trail_viewMatrix=gl.getUniformLocation(trailRendererProgram,'viewMatrix')
         glCache.trail_vertPos=gl.getAttribLocation(trailRendererProgram,'vertPos')
@@ -21167,13 +21190,17 @@ function BeeSwarmSimulator(DATA){
         }
         
         setMesh(verts,index){
+
+            //meshes with more than 65535 vertices (the map, once it's detailed enough) need 32 bit indices
+            let wide=verts.length/(this.isStatic?13:9)>65535
             
             this.mesh={
                 
                 data:{
                     verts:new Float32Array(verts),
-                    index:new Uint16Array(index)
+                    index:wide?new Uint32Array(index):new Uint16Array(index)
                 },
+                indexType:wide?gl.UNSIGNED_INT:gl.UNSIGNED_SHORT,
                 buffers:{
                     verts:gl.createBuffer(),
                     index:gl.createBuffer()
@@ -22217,7 +22244,7 @@ function BeeSwarmSimulator(DATA){
                 gl.vertexAttribPointer(glCache.dynamic_vertNormal,3,gl.FLOAT,gl.FALSE,36,24)
             }
                 
-            gl.drawElements(gl.TRIANGLES,this.mesh.indexAmount,gl.UNSIGNED_SHORT,0)
+            gl.drawElements(gl.TRIANGLES,this.mesh.indexAmount,this.mesh.indexType,0)
             
         }
     }
@@ -23009,6 +23036,9 @@ function BeeSwarmSimulator(DATA){
             cost:['10000000000000 honey','500 glue','2500 gumdrops','25 causticWax','5 turpentine']
         },
     }
+
+    //the detailed tool models in toolModels.js replace the original ones
+    for(let i in window.toolModels) if(gear.tool[i]) gear.tool[i].mesh=window.toolModels[i]
 
     player=(function(out){
 
@@ -25212,6 +25242,154 @@ function BeeSwarmSimulator(DATA){
         out.toolRot=0
         out.toolMatrix=new Float32Array(16)
         out.toolMesh=new Mesh(false)
+
+        //the character is drawn as six jointed parts (see playerModel.js), each with its own matrix every frame
+        out.playerParts={}
+
+        for(let i in window.playerModel.parts)
+            out.playerParts[i]={mesh:new Mesh(false),matrix:new Float32Array(16),pivot:window.playerModel.parts[i].pivot}
+
+        out.animatePlayer=window.playerModel.createAnimator()
+
+        //builds the body parts and moves every equipped piece of gear onto the part it belongs to
+        out.buildPlayerParts=function(){
+
+            let PM=window.playerModel,acc={},scratch=new Mesh(false)
+
+            for(let i in out.playerParts) acc[i]={verts:[],index:[]}
+
+            let capture=function(fn){
+
+                scratch.setMeshFromFunction(fn)
+                return scratch.mesh.data
+            }
+
+            //copies a captured mesh into the parts. place(x,y,z) says which part each triangle goes to and how to move it
+            let route=function(data,place){
+
+                let v=data.verts,ix=data.index,remap={}
+
+                for(let t=0;t<ix.length;t+=3){
+
+                    let a=ix[t]*9,b=ix[t+1]*9,c=ix[t+2]*9,
+                        p=place((v[a]+v[b]+v[c])/3,(v[a+1]+v[b+1]+v[c+1])/3,(v[a+2]+v[b+2]+v[c+2])/3),
+                        dst=acc[p.part],key=p.part
+
+                    if(!remap[key]) remap[key]={}
+
+                    for(let k=0;k<3;k++){
+
+                        let o=ix[t+k],n=remap[key][o]
+
+                        if(n===undefined){
+
+                            let i=o*9,s=p.scale,nx=v[i+6]/s[0],ny=v[i+7]/s[1],nz=v[i+8]/s[2],nl=Math.hypot(nx,ny,nz)||1
+
+                            n=remap[key][o]=dst.verts.length/9
+
+                            dst.verts.push((v[i]-p.from[0])*s[0]+p.to[0]-p.pivot[0],(v[i+1]-p.from[1])*s[1]+p.to[1]-p.pivot[1],(v[i+2]-p.from[2])*s[2]+p.to[2]-p.pivot[2],v[i+3],v[i+4],v[i+5],nx/nl,ny/nl,nz/nl)
+                        }
+
+                        dst.index.push(n)
+                    }
+                }
+            }
+
+            let ident=[0,0,0],one=[1,1,1]
+
+            //the body itself, already built around each part's pivot
+            for(let i in out.playerParts){
+
+                let side=i.indexOf('left')===0?1:-1,f=i.indexOf('Arm')>-1?'arm':i.indexOf('Leg')>-1?'leg':i
+
+                route(capture(function(box,a,cylinder,sphere){PM.build[f](box,cylinder,side)}),function(){return {part:i,from:ident,to:ident,scale:one,pivot:ident}})
+            }
+
+            let totalAmulets=0,currentAmulet=0
+
+            for(let i in out.currentGear) if(i.indexOf('Amulet')>-1) totalAmulets++
+
+            for(let i in out.currentGear){
+
+                if(i==='tool'||i==='sprinkler'||i==='beequips') continue
+
+                let isAmulet=i.indexOf('Amulet')>-1,spec=PM.attachments[isAmulet?'amulet':i]||PM.attachments.glider
+
+                if((i==='glider'||i==='parachute')&&!out.isGliding) continue
+
+                let data=capture(function(box,a,cylinder,sphere,applyFinalRotation,c,star){
+
+                    if(isAmulet){
+
+                        let theta=((((currentAmulet++)+1)/(totalAmulets+1))-0.5)*(totalAmulets*0.25+1)
+
+                        window.amuletOffset=[Math.sin(theta)*1.5,Math.cos(theta)*1.5-1.5]
+
+                        gear[i].mesh(box,cylinder,sphere,star)
+
+                    } else {
+
+                        //masks were drawn over the old character's face, which the new head replaces
+                        let b=i==='mask'?function(x,y,z,w,h,l){if(!PM.isOldFaceBox(x,y,z,w,h,l)) box(...arguments)}:box
+
+                        gear[i][out.currentGear[i]].mesh(b,cylinder,sphere,star,applyFinalRotation,false)
+                    }
+                })
+
+                route(data,function(x){
+
+                    let part=spec.part,from=spec.from,to=spec.to
+
+                    if(spec.sides){
+
+                        let s=x>=0?1:-1
+
+                        part=spec.sides[x>=0?0:1]
+                        from=[from[0]*s,from[1],from[2]]
+                        to=[to[0]*s,to[1],to[2]]
+                    }
+
+                    return {part,from,to,scale:spec.scale,pivot:out.playerParts[part].pivot}
+                })
+            }
+
+            for(let i in out.playerParts){
+
+                out.playerParts[i].mesh.setMesh(acc[i].verts,acc[i].index)
+                out.playerParts[i].mesh.setBuffers()
+            }
+        }
+
+        //turns each joint for this frame, and puts the tool in the right hand
+        out.updatePlayerPose=function(){
+
+            let v=out.body.velocity,PM=window.playerModel,swing=Math.max(0,(-Math.abs(out.toolRot-2)+2)*MATH.QUATER_PI),
+                ang=out.animatePlayer({speed:Math.hypot(v.x,v.z),vy:v.y,grounded:out.grounded&&Math.abs(v.y)<3,gliding:out.isGliding,holdingTool:true,swing:swing},dt)
+
+            for(let i in out.playerParts){
+
+                let p=out.playerParts[i],m=p.matrix
+
+                mat4.translate(m,out.modelMatrix,p.pivot)
+                mat4.rotateZ(m,m,ang[i][1])
+                mat4.rotateX(m,m,ang[i][0])
+            }
+
+            let g=PM.toolGrip
+
+            mat4.translate(out.toolMatrix,out.playerParts.rightArm.matrix,g.hand)
+            mat4.rotateX(out.toolMatrix,out.toolMatrix,MATH.HALF_PI)
+            mat4.translate(out.toolMatrix,out.toolMatrix,[-g.handleStart[0],-g.handleStart[1],-g.handleStart[2]])
+        }
+
+        out.renderPlayerParts=function(modelMatrixLocation){
+
+            for(let i in out.playerParts){
+
+                gl.uniformMatrix4fv(modelMatrixLocation,gl.FALSE,out.playerParts[i].matrix)
+                out.playerParts[i].mesh.render()
+            }
+        }
         out.toolUses=0
         out.toolCooldown=0
         
@@ -26404,47 +26582,7 @@ function BeeSwarmSimulator(DATA){
                 }
             }
 
-            playerMesh.setMeshFromFunction(function(box,a,cylinder,sphere,applyFinalRotation,c,star){
-
-                box(0,0,0,0.5,1,0.5,false,[1.45,1.45,1])
-                
-                //eeeeeeeeeeeeeeeeeeeeee
-                // box(0,0,0,3,0.1,3,false,[0,2,0])
-
-                let totalAmulets=0,currentAmulet=0
-
-                for(let i in out.currentGear) if(i.indexOf('Amulet')>-1) totalAmulets++
-
-                for(let i in out.currentGear){
-                    
-                    if(i==='tool'||i==='sprinkler') continue
-
-                    if(i.indexOf('Amulet')<0&&i!=='beequips'){
-                        
-                        if(i==='glider'||i==='parachute'){
-                            
-                            if(player.isGliding)
-                                gear[i][out.currentGear[i]].mesh(box,cylinder,sphere,star,applyFinalRotation)
-                                
-                        } else {
-                            
-                            gear[i][out.currentGear[i]].mesh(box,cylinder,sphere,star,applyFinalRotation)
-                        }
-                        
-                    } else if(i!=='beequips'){
-                        
-                        let theta=((((currentAmulet++)+1)/(totalAmulets+1))-0.5)*(totalAmulets*0.25+1)
-
-                        let x=Math.sin(theta)*1.5,y=Math.cos(theta)*1.5
-
-                        window.amuletOffset=[x,y-1.5]
-
-                        gear[i].mesh(box,cylinder,sphere,star)   
-                    }
-                }
-            })
-            
-            playerMesh.setBuffers()
+            out.buildPlayerParts()
         }
         
         out.updateHive=function(){
@@ -27663,8 +27801,7 @@ function BeeSwarmSimulator(DATA){
 
             out.toolRot+=dt*10
             
-            mat4.copy(out.toolMatrix,out.modelMatrix)
-            mat4.rotateX(out.toolMatrix,out.toolMatrix,Math.max(0,(-Math.abs(out.toolRot-2)+2)*MATH.QUATER_PI))
+            out.updatePlayerPose()
             
             if(out.viewMatrixToChange){
                 
@@ -32123,6 +32260,23 @@ function BeeSwarmSimulator(DATA){
         verts.push(..._verts)
     }
 
+    //an ellipsoid (a stretched icosphere), shaded a little lighter on top, for the rounder mob models
+    function ellipsoid(x,y,z,sx,sy,sz,r,g,b,detail=1,rx=0,ry=0,rz=0){
+
+        let m=MATH.icosphere(detail),vl=verts.length/6,q=rx||ry||rz?quat.fromEuler([],rx,ry,rz):null
+
+        for(let i=0;i<m.verts.length;i+=3){
+
+            let p=[m.verts[i]*2*sx,m.verts[i+1]*2*sy,m.verts[i+2]*2*sz],sh=0.86+m.verts[i+1]*0.28
+
+            if(q) vec3.transformQuat(p,p,q)
+
+            verts.push(p[0]+x,p[1]+y,p[2]+z,r*sh,g*sh,b*sh)
+        }
+
+        for(let i=0;i<m.index.length;i++) index.push(m.index[i]+vl)
+    }
+
     meshes.explosion={}
     meshes.explosion.vertBuffer=gl.createBuffer()
     meshes.explosion.indexBuffer=gl.createBuffer()
@@ -34495,13 +34649,32 @@ function BeeSwarmSimulator(DATA){
     meshes.festiveNymph.indexAmount=index.length
 
 
-    player.createdMesh=(testRealm?'box(23,-1,2,1,1,1,false,[1,0,1],false,false);box(23,-1,4,1,1,1,false,[1,0,0],false,false);box(23,-1,6,1,1,1,false,[0,0,1],false,false);box(23,-1,8,1,1,1,false,[1,1,1],false,false);box(23,-1,10,1,1,1,false,[1,1,0],false,false);box(19,-1,10,1,1,1,false,[1,1,0],false,false);box(17,-1,10,1,1,1,false,[1,1,1],false,false);box(15,-1,10,1,1,1,false,[1,1,1],false,false);box(13,-1,10,1,1,1,false,[1,1,1],false,false);box(11,-1,10,1,1,1,false,[1,1,1],false,false);box(9,-1,10,1,1,1,false,[1,1,1],false,false);':'')+window.mapMesh+'\n;window.mapMeshAdditions(box,cylinder,sphere,star,INFO);'
+    //the detailed mob models in mobModels.js replace the original ones
+    for(let i in window.mobModels){
+
+        verts=[]
+        index=[]
+
+        window.mobModels[i].build(b,c,ellipsoid)
+
+        gl.bindBuffer(gl.ARRAY_BUFFER,meshes[i].vertBuffer)
+        gl.bufferData(gl.ARRAY_BUFFER,Float32Array.from(verts),gl.STATIC_DRAW)
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,meshes[i].indexBuffer)
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,Uint16Array.from(index),gl.STATIC_DRAW)
+
+        meshes[i].indexAmount=index.length
+    }
+
+    player.createdMesh=(testRealm?'box(23,-1,2,1,1,1,false,[1,0,1],false,false);box(23,-1,4,1,1,1,false,[1,0,0],false,false);box(23,-1,6,1,1,1,false,[0,0,1],false,false);box(23,-1,8,1,1,1,false,[1,1,1],false,false);box(23,-1,10,1,1,1,false,[1,1,0],false,false);box(19,-1,10,1,1,1,false,[1,1,0],false,false);box(17,-1,10,1,1,1,false,[1,1,1],false,false);box(15,-1,10,1,1,1,false,[1,1,1],false,false);box(13,-1,10,1,1,1,false,[1,1,1],false,false);box(11,-1,10,1,1,1,false,[1,1,1],false,false);box(9,-1,10,1,1,1,false,[1,1,1],false,false);':'')+window.mapMesh+'\n;window.mapMeshAdditions(box,cylinder,sphere,star,INFO);window.mapMeshDetails(box,cylinder,sphere,star,INFO);'
 
     let mesh=new Mesh(true)
 
     function UPDATE_MAP_MESH(){
         
         mesh.setMeshFromFunction(function(box,a,cylinder,sphere,d,e,star){
+
+            //the decorations in mapDetails.js are left out in ugly graphics mode
+            window.skipMapDetails=player.extraInfo&&player.extraInfo.enableLowGraph
             
             let f=Object.constructor('box','a','cylinder','sphere','d','e','star','INFO',player.createdMesh)
             
@@ -36019,8 +36192,7 @@ function BeeSwarmSimulator(DATA){
                 
                 gl.useProgram(dynamicGeometryProgram)
                 gl.uniformMatrix4fv(glCache.dynamic_viewMatrix,gl.FALSE,shaMat)
-                gl.uniformMatrix4fv(glCache.dynamic_modelMatrix,gl.FALSE,player.modelMatrix)
-                playerMesh.render()
+                player.renderPlayerParts(glCache.dynamic_modelMatrix)
                 gl.uniformMatrix4fv(glCache.dynamic_modelMatrix,gl.FALSE,player.toolMatrix)
                 player.toolMesh.render()
                 player.computeFinalShadowMapBeforeEnteringField=0
@@ -36051,8 +36223,7 @@ function BeeSwarmSimulator(DATA){
         
         if(player.zoom>1){
 
-            gl.uniformMatrix4fv(glCache.dynamic_modelMatrix,gl.FALSE,player.modelMatrix)
-            playerMesh.render()
+            player.renderPlayerParts(glCache.dynamic_modelMatrix)
         }
         
         gl.uniformMatrix4fv(glCache.dynamic_modelMatrix,gl.FALSE,player.toolMatrix)
@@ -36512,7 +36683,7 @@ function BeeSwarmSimulator(DATA){
         window.triggers=triggers
         window.shops=shops
         window.beeInfo=beeInfo
-        window.gameInternals={LootToken,BugMob,Aphid,CommandoChick,UPDATE_MAP_MESH,SAVE_GAME,GENERATE_SAVE_CODE,RUN_SAVE_CODE,VFX,ParticleRenderer,getTime:()=>TIME}
+        window.gameInternals={LootToken,BugMob,Aphid,CommandoChick,UPDATE_MAP_MESH,SAVE_GAME,GENERATE_SAVE_CODE,RUN_SAVE_CODE,VFX,ParticleRenderer,getMapMesh:()=>mesh,getWorld:()=>world,getTime:()=>TIME}
     }
     
 }
