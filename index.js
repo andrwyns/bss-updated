@@ -10903,6 +10903,7 @@ function BeeSwarmSimulator(DATA){
                                 let h=(this.attack+player[beeInfo[this.type].color+'BeeAttack'])*player.beeAttack*(this.type==='precise'?this.gifted?2:1.5:1)*(this.type==='buoyant'?player.buoyantBeeAttack:1)
                                 
                                 this.attackMob.damage(h)
+                                if(this.attackMob.pos) VFX.stingerHit(this.pos,this.attackMob.pos,beeInfo[this.type].color)
                                 
                                 if(this.type==='precise'){
                                     
@@ -11254,6 +11255,8 @@ function BeeSwarmSimulator(DATA){
                             
                             ParticleRenderer.add({x:this.pos[0],y:this.pos[1],z:this.pos[2],vx:MATH.random(-1,1),vy:MATH.random(-1,1),vz:MATH.random(0,3),grav:0,size:MATH.random(60,100),col:this.type==='diamond'?[0.1,0.7,0.9]:COLORS.honey_normalized,life:0.75,rotVel:MATH.random(-3,3),alpha:5})
                         }
+
+                        VFX.honeyStream(this.pos,this.type==='diamond')
                     }
                     
                 break
@@ -11729,6 +11732,7 @@ function BeeSwarmSimulator(DATA){
                             let h=(this.attack+player[beeInfo[this.type].color+'BeeAttack'])*player.beeAttack*(this.type==='precise'?this.gifted?2.25:1.5:1)*(this.type==='buoyant'?player.buoyantBeeAttack:1)
                             
                             this.attackMob.damage(h)
+                            if(this.attackMob.pos) VFX.stingerHit(this.pos,this.attackMob.pos,beeInfo[this.type].color)
                             
                             if(this.type==='precise'){
                                 
@@ -26444,6 +26448,8 @@ function BeeSwarmSimulator(DATA){
         }
         
         out.updateHive=function(){
+
+            out.vfxHiveDirty=true
             
             out.hiveMesh.setMeshFromFunction(function(box,hiveSlot,useless1,useless2,useless3,giftedRing){
 
@@ -30667,16 +30673,70 @@ function BeeSwarmSimulator(DATA){
             for(let i=out.particles.length;i--;){
                 
                 let d=out.particles[i]
+
+                //optional start delay, so effects can be sequenced from one call
+                if(d.delay>0){
+                    
+                    d.delay-=dt
+                    continue
+                }
+
                 d.vy+=d.grav*dt
+
+                //optional extras used by VFX: drag, homing toward a live {x,y,z} target, and orbiting around a vertical axis
+                if(d.drag){
+                    
+                    let k=Math.max(1-d.drag*dt,0)
+                    d.vx*=k
+                    d.vy*=k
+                    d.vz*=k
+                }
+
+                if(d.home){
+                    
+                    let dx=d.home.x-d.x,dy=d.home.y+(d.homeOffY||0)-d.y,dz=d.home.z-d.z,dist=Math.sqrt(dx*dx+dy*dy+dz*dz)
+
+                    if(dist<0.35){
+                        
+                        d.life=0
+                        
+                    } else {
+                        
+                        let s=d.homeSpeed/dist,k=Math.min(d.homing*dt,1)
+                        d.vx+=(dx*s-d.vx)*k
+                        d.vy+=(dy*s-d.vy)*k
+                        d.vz+=(dz*s-d.vz)*k
+                    }
+                }
+
                 d.x+=d.vx*dt
                 d.y+=d.vy*dt
                 d.z+=d.vz*dt
+
+                if(d.orbit){
+                    
+                    let o=d.orbit
+                    o.a+=o.w*dt
+                    o.r+=(o.dr||0)*dt
+                    d.x=o.cx+Math.cos(o.a)*o.r
+                    d.z=o.cz+Math.sin(o.a)*o.r
+                }
+
                 d.rot+=d.rotVel*dt
                 d.life-=dt
-                d.col[3]=d.life*d.alpha/d.lifespan
-                
-                
-                out.verts.push(d.x,d.y,d.z,d.col[0],d.col[1],d.col[2],d.col[3],d.size,d.rot)
+                d.col[3]=Math.max(d.life,0)*d.alpha/d.lifespan
+
+                if(d.endCol||d.endSize!==undefined){
+                    
+                    //t runs from 1 at birth to 0 at death
+                    let t=Math.max(d.life,0)/d.lifespan,c=d.endCol||d.col,sz=d.endSize===undefined?d.size:d.endSize
+
+                    out.verts.push(d.x,d.y,d.z,c[0]+(d.col[0]-c[0])*t,c[1]+(d.col[1]-c[1])*t,c[2]+(d.col[2]-c[2])*t,d.col[3],sz+(d.size-sz)*t,d.rot)
+
+                } else {
+                    
+                    out.verts.push(d.x,d.y,d.z,d.col[0],d.col[1],d.col[2],d.col[3],d.size,d.rot)
+                }
                 
                 if(d.life<=0){
                     
@@ -30739,19 +30799,234 @@ function BeeSwarmSimulator(DATA){
                 ParticleRenderer.add({x:pos[0]+MATH.random(-0.4,0.4),y:pos[1]+MATH.random(-0.2,0.2),z:pos[2]+MATH.random(-0.4,0.4),vx:0,vy:MATH.random(0.9,1.8),vz:0,grav:0,size:MATH.random(40,70),col:[n,n,0.9*n],life:0.5,rotVel:MATH.random(-5,5),alpha:1.3})
         },
 
-        //a ring of sparks flying out of a token that was picked up
-        tokenBurst:function(pos){
+        //a ring of sparks flying out of a token that was picked up, tinted by the color of the bee that made it
+        tokenBurst:function(pos,color){
 
             if(!VFX.ready()) return
 
-            let n=player.isNight,turn=Math.random()*MATH.TWO_PI
+            let n=player.isNight,turn=Math.random()*MATH.TWO_PI,c=VFX.tint(color||'honey')
 
             for(let i=0;i<6;i++){
 
                 let a=turn+i*MATH.TWO_PI/6
 
-                ParticleRenderer.add({x:pos[0],y:pos[1],z:pos[2],vx:Math.cos(a)*2.6,vy:MATH.random(1.2,2.4),vz:Math.sin(a)*2.6,grav:-5,size:MATH.random(40,65),col:[n,0.95*n,0.55*n],life:0.45,rotVel:MATH.random(-8,8),alpha:1.6})
+                ParticleRenderer.add({x:pos[0],y:pos[1],z:pos[2],vx:Math.cos(a)*2.6,vy:MATH.random(1.2,2.4),vz:Math.sin(a)*2.6,grav:-5,size:MATH.random(40,65),col:[n,0.95*n,0.55*n],endCol:c,life:0.45,rotVel:MATH.random(-8,8),alpha:1.6})
             }
+        },
+
+        //bright, night-adjusted colors for each bee color
+        tint:function(color){
+
+            let n=player.isNight,c=({red:[1,0.32,0.26],blue:[0.38,0.6,1],white:[1,1,0.92],honey:[1,0.82,0.22],bond:[1,0.45,0.8],gifted:[1,0.86,0.3]})[color]||[1,1,1]
+
+            return [c[0]*n,c[1]*n,c[2]*n]
+        },
+
+        ring:function(x,y,z,col,size,life,alpha){
+
+            objects.explosions.push(new Explosion({col:col,pos:[x,y,z],life:life,size:size,speed:0.14,aftershock:0.02,maxAlpha:alpha,backface:true,primitive:'cylinder_explosions',height:0.12}))
+        },
+
+        //honey droplets leave the hive slot, arc out and get pulled into the player
+        honeyStream:function(pos,diamond){
+
+            if(!VFX.ready(650)) return
+
+            let p=player.body.position,c=diamond?VFX.tint('blue'):VFX.tint('honey'),n=player.isNight
+
+            for(let i=0;i<5;i++)
+                ParticleRenderer.add({x:pos[0],y:pos[1],z:pos[2],vx:MATH.random(-2.5,2.5),vy:MATH.random(2,4.5),vz:MATH.random(-2.5,2.5),grav:-4,size:MATH.random(88,136),endSize:40,col:c.slice(),endCol:[n,n,0.85*n],life:1.8,rotVel:MATH.random(-4,4),alpha:2,home:p,homeOffY:0.2,homeSpeed:MATH.random(9,13),homing:MATH.random(1.6,2.6),delay:i*0.04})
+        },
+
+        //motes of honey spiral up around the player while the hive is converting
+        convertAura:function(){
+
+            VFX.auraTimer=(VFX.auraTimer||0)-dt
+
+            if(VFX.auraTimer>0||!VFX.ready(550)) return
+
+            VFX.auraTimer=0.07
+
+            let p=player.body.position,a=TIME*5.5
+
+            for(let s=0;s<2;s++)
+                ParticleRenderer.add({x:p.x,y:p.y-0.9,z:p.z,vx:0,vy:1.5,vz:0,grav:0,size:MATH.random(60,90),endSize:15,col:VFX.tint('honey'),endCol:VFX.tint('white'),life:1.1,rotVel:3,alpha:1.4,orbit:{cx:p.x,cz:p.z,a:a+s*Math.PI,r:1.2,w:4,dr:-0.7}})
+
+            VFX.ringTimer=(VFX.ringTimer||0)-0.07
+
+            if(VFX.ringTimer<=0){
+
+                VFX.ringTimer=0.9
+
+                let c=VFX.tint('honey')
+                VFX.ring(p.x,p.y-0.95,p.z,c,2.4,0.9,0.35)
+            }
+        },
+
+        //a stinger strike: a short streak along the attack and sparks that scatter from the impact
+        stingerHit:function(beePos,mobPos,color){
+
+            if(!VFX.ready(600)) return
+
+            let c=VFX.tint(color),n=player.isNight,dx=mobPos[0]-beePos[0],dy=mobPos[1]-beePos[1],dz=mobPos[2]-beePos[2],l=Math.sqrt(dx*dx+dy*dy+dz*dz)||1
+
+            dx/=l
+            dy/=l
+            dz/=l
+
+            for(let i=0;i<4;i++)
+                ParticleRenderer.add({x:beePos[0]-dx*i*0.18,y:beePos[1]-dy*i*0.18,z:beePos[2]-dz*i*0.18,vx:0,vy:0,vz:0,grav:0,size:81-i*14,col:[n,n,n],endCol:c,life:0.12+i*0.02,rotVel:0,alpha:1.5})
+
+            for(let i=0;i<5;i++)
+                ParticleRenderer.add({x:beePos[0],y:beePos[1],z:beePos[2],vx:dx*3+MATH.random(-3,3),vy:dy*3+MATH.random(-1,3),vz:dz*3+MATH.random(-3,3),grav:-9,drag:5,size:MATH.random(54,90),endSize:14,col:[n,n,0.9*n],endCol:c,life:MATH.random(0.25,0.4),rotVel:MATH.random(-10,10),alpha:1.8})
+        },
+
+        //a defeated mob: a flash, a shockwave along the ground, scattering sparks and slow rising wisps
+        mobDefeat:function(pos){
+
+            if(!VFX.ready(900)) return
+
+            let n=player.isNight,turn=Math.random()*MATH.TWO_PI
+
+            objects.explosions.push(new Explosion({col:[n,n,0.85*n],pos:[pos[0],pos[1]+0.5,pos[2]],life:0.35,size:2.6,speed:0.35,aftershock:0.05,maxAlpha:0.6}))
+            VFX.ring(pos[0],pos[1]-0.3,pos[2],[n,0.9*n,0.6*n],4.5,0.6,0.5)
+
+            for(let i=0;i<14;i++){
+
+                let a=turn+i*MATH.TWO_PI/14,sp=MATH.random(4,7)
+
+                ParticleRenderer.add({x:pos[0],y:pos[1]+0.4,z:pos[2],vx:Math.cos(a)*sp,vy:MATH.random(2,6),vz:Math.sin(a)*sp,grav:-14,drag:2.5,size:MATH.random(80,140),endSize:20,col:[n,n,0.8*n],endCol:[n,0.55*n,0.15*n],life:MATH.random(0.5,0.8),rotVel:MATH.random(-10,10),alpha:1.8})
+            }
+
+            for(let i=0;i<6;i++)
+                ParticleRenderer.add({x:pos[0]+MATH.random(-0.6,0.6),y:pos[1],z:pos[2]+MATH.random(-0.6,0.6),vx:MATH.random(-0.3,0.3),vy:MATH.random(0.8,1.6),vz:MATH.random(-0.3,0.3),grav:0,drag:0.8,size:MATH.random(180,280),endSize:520,col:[0.85*n,0.85*n,0.85*n],endCol:[0.5*n,0.5*n,0.55*n],life:MATH.random(1,1.5),rotVel:MATH.random(-2,2),alpha:0.5,delay:0.08})
+        },
+
+        //celebrations at a hive slot: a bee leveling up, turning gifted or hatching
+        hiveSlotEvent:function(x,y,kind,color){
+
+            if(!VFX.ready(900)) return
+
+            let p=[player.hivePos[0]+x*0.8,player.hivePos[1]+y*0.8-2.25,player.hivePos[2]+0.4],n=player.isNight
+
+            if(kind==='level'){
+
+                //a double helix of bond-pink and white sparks climbing past the slot
+                let c=VFX.tint('bond')
+
+                for(let i=0;i<24;i++)
+                    ParticleRenderer.add({x:p[0],y:p[1]-0.4,z:p[2],vx:0,vy:2.2,vz:0,grav:0,size:MATH.random(104,143),endSize:39,col:i%2?[n,n,n]:c.slice(),endCol:c,life:0.9,rotVel:5,alpha:1.6,delay:(i>>1)*0.05,orbit:{cx:p[0],cz:p[2],a:(i%2)*Math.PI,r:0.5,w:9,dr:-0.35}})
+
+                VFX.ring(p[0],p[1]-0.4,p[2],c,1.6,0.7,0.45)
+                VFX.ring(p[0],p[1]+0.6,p[2],c,1.2,0.7,0.3)
+
+            } else if(kind==='gifted'){
+
+                //a golden starburst that hangs for a moment, then a shower of glints
+                let c=VFX.tint('gifted'),turn=Math.random()*MATH.TWO_PI
+
+                objects.explosions.push(new Explosion({col:c,pos:p,life:0.6,size:1.8,speed:0.25,aftershock:0.02,maxAlpha:0.55}))
+
+                for(let i=0;i<10;i++){
+
+                    let a=turn+i*MATH.TWO_PI/10
+
+                    for(let j=0;j<3;j++)
+                        ParticleRenderer.add({x:p[0],y:p[1],z:p[2],vx:Math.cos(a)*(5-j),vy:Math.sin(a)*(5-j),vz:-0.5,grav:0,drag:4,size:182-j*39,endSize:26,col:[n,n,0.9*n],endCol:c,life:0.9,rotVel:MATH.random(-6,6),alpha:2,delay:j*0.04})
+                }
+
+                for(let i=0;i<14;i++)
+                    ParticleRenderer.add({x:p[0]+MATH.random(-0.8,0.8),y:p[1]+MATH.random(0.5,1.2),z:p[2]+MATH.random(-0.3,0),vx:0,vy:-0.6,vz:0,grav:-0.8,size:MATH.random(78,130),col:c.slice(),endCol:[n,n,n],life:1.2,rotVel:MATH.random(-8,8),alpha:1.5,delay:0.25+Math.random()*0.4})
+
+            } else if(kind==='hatch'){
+
+                //the egg cracks: a white pop, shell shards that fall away, and a puff in the new bee's color
+                let c=VFX.tint(color)
+
+                objects.explosions.push(new Explosion({col:[n,n,n],pos:p,life:0.4,size:1.4,speed:0.4,aftershock:0.03,maxAlpha:0.7}))
+
+                for(let i=0;i<10;i++)
+                    ParticleRenderer.add({x:p[0],y:p[1],z:p[2],vx:MATH.random(-3,3),vy:MATH.random(1,4),vz:MATH.random(-2.5,-0.5),grav:-12,size:MATH.random(117,182),col:[0.95*n,0.92*n,0.85*n],life:MATH.random(0.6,0.9),rotVel:MATH.random(-12,12),alpha:1.5})
+
+                for(let i=0;i<8;i++)
+                    ParticleRenderer.add({x:p[0],y:p[1],z:p[2],vx:MATH.random(-1.2,1.2),vy:MATH.random(-1.2,1.2),vz:MATH.random(-1,0),grav:0,drag:2,size:MATH.random(208,312),endSize:520,col:c.slice(),life:0.8,rotVel:MATH.random(-3,3),alpha:0.8,delay:0.05})
+            }
+        },
+
+        //compares the hive with what it looked like last time and celebrates what changed
+        checkHive:function(){
+
+            let seen=player.vfxHiveSeen,events=[]
+
+            player.vfxHiveSeen={}
+
+            for(let y in player.hive){
+
+                for(let x in player.hive[y]){
+
+                    let h=player.hive[y][x],k=x+','+y,was=seen&&seen[k]
+
+                    player.vfxHiveSeen[k]={type:h.type,level:h.level,gifted:h.gifted}
+
+                    if(!was||!h.type) continue
+
+                    if(was.type!==h.type){
+
+                        events.push([x,y,'hatch',beeInfo[h.type]&&beeInfo[h.type].color])
+                        if(h.gifted) events.push([x,y,'gifted'])
+
+                    } else if(h.gifted&&!was.gifted){
+
+                        events.push([x,y,'gifted'])
+
+                    } else if(h.level>was.level){
+
+                        events.push([x,y,'level'])
+                    }
+                }
+            }
+
+            //a lot changing at once means a save was loaded or the hive was rebuilt, not something to celebrate
+            if(!seen||events.length>4) return
+
+            for(let i in events)
+                VFX.hiveSlotEvent(+events[i][0],+events[i][1],events[i][2],events[i][3])
+        },
+
+        //an orange warning pulse the moment the backpack fills up in a field
+        backpackFull:function(){
+
+            let p=player.body.position,n=player.isNight
+
+            VFX.ring(p.x,p.y-0.95,p.z,[n,0.4*n,0.1*n],3.2,0.7,0.5)
+
+            if(!VFX.ready(800)) return
+
+            for(let i=0;i<12;i++){
+
+                let a=i*MATH.TWO_PI/12
+
+                ParticleRenderer.add({x:p.x+Math.cos(a)*0.6,y:p.y-0.6,z:p.z+Math.sin(a)*0.6,vx:Math.cos(a)*2,vy:MATH.random(2.5,3.5),vz:Math.sin(a)*2,grav:-6,drag:1.5,size:MATH.random(45,65),endSize:15,col:[n,0.75*n,0.2*n],endCol:[n,0.3*n,0.1*n],life:0.6,rotVel:MATH.random(-6,6),alpha:1.6})
+            }
+        },
+
+        //runs once a frame
+        tick:function(){
+
+            if(player.extraInfo.enableLowGraph) return
+
+            if(player.converting&&player.pollen>0) VFX.convertAura()
+
+            let full=!!player.fieldIn&&player.capacity>0&&player.pollen>=player.capacity
+
+            //a cooldown so passives that skim a little pollen off a full bag don't make it flicker
+            if(full&&!VFX.wasFull&&TIME-(VFX.lastFullPulse||-99)>4){
+                
+                VFX.lastFullPulse=TIME
+                VFX.backpackFull()
+            }
+
+            VFX.wasFull=full
         }
     }
 
@@ -31312,7 +31587,7 @@ function BeeSwarmSimulator(DATA){
             if(!this.collected){
                 
                 this.collected=true
-                VFX.tokenBurst(this.pos)
+                VFX.tokenBurst(this.pos,this.funcParams&&this.funcParams.bee&&beeInfo[this.funcParams.bee.type]&&beeInfo[this.funcParams.bee.type].color)
                 this.life=0.75
                 player.stats.abilityTokens++
                 
@@ -31423,7 +31698,7 @@ function BeeSwarmSimulator(DATA){
             if(!this.collected){
                 
                 this.collected=true
-                VFX.tokenBurst(this.pos)
+                VFX.tokenBurst(this.pos,this.funcParams&&this.funcParams.bee&&beeInfo[this.funcParams.bee.type]&&beeInfo[this.funcParams.bee.type].color)
                 this.life=0.75
                 
                 player.stats[this.type+'Tokens']++
@@ -31508,7 +31783,7 @@ function BeeSwarmSimulator(DATA){
             if(!this.collected){
                 
                 this.collected=true
-                VFX.tokenBurst(this.pos)
+                VFX.tokenBurst(this.pos,this.funcParams&&this.funcParams.bee&&beeInfo[this.funcParams.bee.type]&&beeInfo[this.funcParams.bee.type].color)
                 this.life=0.75
                 player.stats.abilityTokens++
                 
@@ -35961,6 +36236,14 @@ function BeeSwarmSimulator(DATA){
             objects.bees[i].update()
             VFX.giftedSparkle(objects.bees[i])
         }
+
+        if(player.vfxHiveDirty){
+
+            player.vfxHiveDirty=false
+            VFX.checkHive()
+        }
+
+        VFX.tick()
         
         for(let i in objects.tempBees){
             
@@ -36074,6 +36357,19 @@ function BeeSwarmSimulator(DATA){
         gl.uniform3fv(glCache.mob_camPos,player.cameraPos)
 
         for(let i=objects.mobs.length;i--;){
+
+            //celebrate the moment a mob's health runs out (some mobs stay around afterward to respawn, so watch the health rather than removal)
+            let m=objects.mobs[i]
+
+            if(m.health>0){
+                
+                m.vfxAlive=true
+                
+            } else if(m.vfxAlive){
+                
+                m.vfxAlive=false
+                if(m.pos) VFX.mobDefeat(m.pos)
+            }
             
             if(objects.mobs[i].update()){
                 
@@ -36216,7 +36512,7 @@ function BeeSwarmSimulator(DATA){
         window.triggers=triggers
         window.shops=shops
         window.beeInfo=beeInfo
-        window.gameInternals={LootToken,BugMob,Aphid,CommandoChick,UPDATE_MAP_MESH,SAVE_GAME,GENERATE_SAVE_CODE,RUN_SAVE_CODE,getTime:()=>TIME}
+        window.gameInternals={LootToken,BugMob,Aphid,CommandoChick,UPDATE_MAP_MESH,SAVE_GAME,GENERATE_SAVE_CODE,RUN_SAVE_CODE,VFX,ParticleRenderer,getTime:()=>TIME}
     }
     
 }
