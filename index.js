@@ -27727,6 +27727,11 @@ function BeeSwarmSimulator(DATA){
             if(out.cameraDir.length)
                 out.raycastCameraClipping()
             
+            //the camera jolts when a big ability goes off (window.BSS_SHAKE is set by the anime effects)
+            let shake=window.BSS_SHAKE||0
+
+            out.shakeOffset=[(Math.random()-0.5)*shake,(Math.random()-0.5)*shake,(Math.random()-0.5)*shake]
+
             if(out.shiftLock){
                 
                 MATH.xRotate(MATH.yRotate(out.viewMatrix,out.cosYaw,out.sinYaw),out.cosPitch,out.sinPitch)
@@ -27741,7 +27746,7 @@ function BeeSwarmSimulator(DATA){
                 
                 let normalizedCamDir=vec2.normalize([],out.lookDir)
                 
-                MATH.translate(out.viewMatrix,-player.body.position.x-out.cameraDir[0]*d+normalizedCamDir[1],-player.body.position.y-0.5-out.cameraDir[1]*d,-player.body.position.z-out.cameraDir[2]*d-normalizedCamDir[0])
+                MATH.translate(out.viewMatrix,-player.body.position.x-out.cameraDir[0]*d+normalizedCamDir[1]+out.shakeOffset[0],-player.body.position.y-0.5-out.cameraDir[1]*d+out.shakeOffset[1],-player.body.position.z-out.cameraDir[2]*d-normalizedCamDir[0]+out.shakeOffset[2])
                 
                 MATH.mult(out.viewMatrix,out.projectionMatrix,out.viewMatrix)
                 
@@ -27767,7 +27772,7 @@ function BeeSwarmSimulator(DATA){
                 
                 let d=out.cameraRaycastResult.distance<0?out.zoom:out.cameraRaycastResult.distance
                 
-                MATH.translate(out.viewMatrix,-player.body.position.x-out.cameraDir[0]*d,-player.body.position.y-0.5-out.cameraDir[1]*d,-player.body.position.z-out.cameraDir[2]*d)
+                MATH.translate(out.viewMatrix,-player.body.position.x-out.cameraDir[0]*d+out.shakeOffset[0],-player.body.position.y-0.5-out.cameraDir[1]*d+out.shakeOffset[1],-player.body.position.z-out.cameraDir[2]*d+out.shakeOffset[2])
                 MATH.mult(out.viewMatrix,out.projectionMatrix,out.viewMatrix)
                 
                 vec2.normalize(out.lookDir,[out.body.velocity.x,out.body.velocity.z])
@@ -30899,6 +30904,9 @@ function BeeSwarmSimulator(DATA){
     })({})
 
     //purely cosmetic particle effects. They're skipped in "ugly graphics" mode and while there are already plenty of particles around
+    //the anime style ability effects (animeFX.js)
+    let animeFX=window.AnimeFX.create(gl)
+
     let VFX={
 
         ready:function(limit=700){
@@ -30949,6 +30957,24 @@ function BeeSwarmSimulator(DATA){
 
                 ParticleRenderer.add({x:pos[0],y:pos[1],z:pos[2],vx:Math.cos(a)*2.6,vy:MATH.random(1.2,2.4),vz:Math.sin(a)*2.6,grav:-5,size:MATH.random(40,65),col:[n,0.95*n,0.55*n],endCol:c,life:0.45,rotVel:MATH.random(-8,8),alpha:1.6})
             }
+        },
+
+        //an ability token was collected: play its anime effect where the ability lands
+        ability:function(type,pos,params){
+
+            let a=window.AnimeFX.abilities[type]
+
+            if(!a||player.extraInfo.enableLowGraph) return
+
+            let [kind,col,s]=a,ground=params&&params.field&&fieldInfo[params.field]?fieldInfo[params.field].y:pos[1]-1,
+                at=params&&params.field&&fieldInfo[params.field]&&params.x!==undefined?[fieldInfo[params.field].x+params.x,ground,fieldInfo[params.field].z+params.z]:[pos[0],ground,pos[2]]
+
+            if(kind==='boost') animeFX.boost(player.body.position,col,s)
+            else if(kind==='converge') animeFX.converge(player.body.position,col)
+            else if(kind==='sparkle') animeFX.sparkle([at[0],ground+1,at[2]],col,s)
+            else if(kind==='impact'||kind==='lightning') animeFX[kind](at,col,s,ground)
+            else if(kind==='fire') animeFX.fire(at,s,col)
+            else animeFX[kind](at,col,s)
         },
 
         //bright, night-adjusted colors for each bee color
@@ -31003,6 +31029,8 @@ function BeeSwarmSimulator(DATA){
         //a stinger strike: a short streak along the attack and sparks that scatter from the impact
         stingerHit:function(beePos,mobPos,color){
 
+            if(!player.extraInfo.enableLowGraph&&Math.random()<0.6) animeFX.slash(beePos,({red:[1,0.25,0.15],blue:[0.25,0.55,1],white:[1,1,0.85]})[color]||[1,1,1],0.8)
+
             if(!VFX.ready(600)) return
 
             let c=VFX.tint(color),n=player.isNight,dx=mobPos[0]-beePos[0],dy=mobPos[1]-beePos[1],dz=mobPos[2]-beePos[2],l=Math.sqrt(dx*dx+dy*dy+dz*dz)||1
@@ -31020,6 +31048,8 @@ function BeeSwarmSimulator(DATA){
 
         //a defeated mob: a flash, a shockwave along the ground, scattering sparks and slow rising wisps
         mobDefeat:function(pos){
+
+            if(!player.extraInfo.enableLowGraph) animeFX.impact(pos,[1,0.8,0.4],0.6,pos[1]-0.6)
 
             if(!VFX.ready(900)) return
 
@@ -31725,6 +31755,7 @@ function BeeSwarmSimulator(DATA){
                 
                 this.collected=true
                 VFX.tokenBurst(this.pos,this.funcParams&&this.funcParams.bee&&beeInfo[this.funcParams.bee.type]&&beeInfo[this.funcParams.bee.type].color)
+                VFX.ability(this.type,this.pos,this.funcParams)
                 this.life=0.75
                 player.stats.abilityTokens++
                 
@@ -31836,6 +31867,7 @@ function BeeSwarmSimulator(DATA){
                 
                 this.collected=true
                 VFX.tokenBurst(this.pos,this.funcParams&&this.funcParams.bee&&beeInfo[this.funcParams.bee.type]&&beeInfo[this.funcParams.bee.type].color)
+                VFX.ability(this.type,this.pos,this.funcParams)
                 this.life=0.75
                 
                 player.stats[this.type+'Tokens']++
@@ -31921,6 +31953,7 @@ function BeeSwarmSimulator(DATA){
                 
                 this.collected=true
                 VFX.tokenBurst(this.pos,this.funcParams&&this.funcParams.bee&&beeInfo[this.funcParams.bee.type]&&beeInfo[this.funcParams.bee.type].color)
+                VFX.ability(this.type,this.pos,this.funcParams)
                 this.life=0.75
                 player.stats.abilityTokens++
                 
@@ -36520,6 +36553,22 @@ function BeeSwarmSimulator(DATA){
         ParticleRenderer.render()
         
         TrailRenderer.render()
+
+        if(player.extraInfo.enableLowGraph){
+
+            animeFX.particles.length=0
+            animeFX.shake=0
+
+        } else {
+
+            let boundTexture=gl.getParameter(gl.TEXTURE_BINDING_2D)
+
+            animeFX.update(dt)
+            animeFX.render(player.viewMatrix,player.cameraPos,player.isNight)
+            gl.bindTexture(gl.TEXTURE_2D,boundTexture)
+        }
+
+        window.BSS_SHAKE=animeFX.shake*0.35
         
         player.attacked=[]
 
@@ -36683,7 +36732,7 @@ function BeeSwarmSimulator(DATA){
         window.triggers=triggers
         window.shops=shops
         window.beeInfo=beeInfo
-        window.gameInternals={LootToken,BugMob,Aphid,CommandoChick,UPDATE_MAP_MESH,SAVE_GAME,GENERATE_SAVE_CODE,RUN_SAVE_CODE,VFX,ParticleRenderer,getMapMesh:()=>mesh,getWorld:()=>world,getTime:()=>TIME}
+        window.gameInternals={LootToken,BugMob,Aphid,CommandoChick,UPDATE_MAP_MESH,SAVE_GAME,GENERATE_SAVE_CODE,RUN_SAVE_CODE,VFX,ParticleRenderer,animeFX,getMapMesh:()=>mesh,getWorld:()=>world,getTime:()=>TIME}
     }
     
 }

@@ -64,6 +64,11 @@ legs walk, and each field is ringed with props that match it: sunflowers, mushro
 more. Honey conversion, stinger hits, defeated mobs, level ups, gifted bees, hatching and a full backpack each have their own
 particle effect.
 
+Bee abilities play anime-style effects when their tokens are collected: bombs explode with a white-hot flash over a dark
+spiky silhouette, ground shockwaves, glowing cracks, flying sparks, debris and smoke, and shake the camera; boosts spin a
+magic circle under the player with rising aura lines; Inferno erupts in flame tongues, Beam Storm strikes with forked
+lightning, tornadoes and pollen haze swirl, marks draw rune circles, and stinger hits leave crescent slashes.
+
 Where this differs from the original on purpose: there are no stickers, so sticker prizes and the Sticker Stack badge are left out;
 the Mountain Top badge boosts all bee gathering instead of only gifted bees; the Wealth Clock keeps its power between sessions
 as long as it's wound within 75 minutes of playtime; and the new beequips have approximated stats, because the original's stat
@@ -83,6 +88,7 @@ tables aren't public.
 | `mapDetails.js` | Decorations around the fields. Their placements were baked by raycasting the map's collision geometry, so each one stands on flat ground clear of walls, roofs, NPCs and machines. |
 | `playerModel.js` | The R6 character: its parts, where each gear slot attaches, and the animations. |
 | `toolModels.js`, `mobModels.js` | Detailed tool and mob models, which replace the original meshes of the same name. |
+| `animeFX.js` | The anime ability effects: a procedurally painted texture atlas, an instanced renderer for camera-facing, flat and stretched quads, and an effect for each kind of ability. |
 | `codes.js` | Promo codes. |
 | `mapMesh.js`, `playerGear.js`, `textures.js`, `GLSLShaders.js`, `MathHelper.js`, `thumbnail.js` | The map, gear, textures, shaders and helpers. |
 
